@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>迷路ジェネレーター</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #f3f4f6; }
+        #canvas-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 20px;
+            overflow: auto;
+            max-height: 70vh;
+        }
+        canvas {
+            border: 2px solid #333;
+            background-color: #fff;
+        }
+    </style>
+</head>
+<body class="p-4 font-sans text-gray-800">
+
+    <div class="max-w-5xl mx-auto bg-white p-6 rounded-lg shadow-md">
+        <h1 class="text-3xl font-bold mb-6 text-center text-blue-600">迷路ジェネレーター</h1>
+        
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div>
+                <label for="cols" class="block text-sm font-medium text-gray-700">幅 (列数)</label>
+                <input type="number" id="cols" value="20" min="5" max="100" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+            </div>
+            <div>
+                <label for="rows" class="block text-sm font-medium text-gray-700">高さ (行数)</label>
+                <input type="number" id="rows" value="20" min="5" max="100" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+            </div>
+            <div>
+                <label for="cellSize" class="block text-sm font-medium text-gray-700">セルのサイズ (px)</label>
+                <input type="number" id="cellSize" value="30" min="10" max="100" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+            </div>
+            <div>
+                <label for="speed" class="block text-sm font-medium text-gray-700">生成速度 (ミリ秒/ステップ)</label>
+                <input type="number" id="speed" value="10" min="0" max="500" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+            </div>
+        </div>
+
+        <div class="flex flex-wrap gap-4 justify-center mb-6">
+            <button id="generate-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded transition duration-200">迷路を作る</button>
+            <button id="download-maze-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded transition duration-200 opacity-50 cursor-not-allowed" disabled>迷路を保存</button>
+            <button id="download-solution-btn" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded transition duration-200 opacity-50 cursor-not-allowed" disabled>答え付きを保存</button>
+        </div>
+
+        <div id="status-text" class="text-center font-bold text-lg mb-2 text-gray-600">設定を決めて「迷路を作る」を押してください</div>
+
+        <div id="canvas-container">
+            <canvas id="maze-canvas"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('maze-canvas');
+        const ctx = canvas.getContext('2d');
+        const generateBtn = document.getElementById('generate-btn');
+        const downloadMazeBtn = document.getElementById('download-maze-btn');
+        const downloadSolutionBtn = document.getElementById('download-solution-btn');
+        const colsInput = document.getElementById('cols');
+        const rowsInput = document.getElementById('rows');
+        const cellSizeInput = document.getElementById('cellSize');
+        const speedInput = document.getElementById('speed');
+        const statusText = document.getElementById('status-text');
+
+        let cols, rows, w;
+        let grid = [];
+        let current;
+        let stack = [];
+        let isGenerating = false;
+        let animationId;
+        let solutionPath = [];
+        let generationInterval;
+
+        class Cell {
+            constructor(i, j) {
+                this.i = i;
+                this.j = j;
+                this.walls = [true, true, true, true]; // top, right, bottom, left
+                this.visited = false;
+            }
+
+            checkNeighbors() {
+                let neighbors = [];
+                let top = grid[index(this.i, this.j - 1)];
+                let right = grid[index(this.i + 1, this.j)];
+                let bottom = grid[index(this.i, this.j + 1)];
+                let left = grid[index(this.i - 1, this.j)];
+
+                if (top && !top.visited) neighbors.push(top);
+                if (right && !right.visited) neighbors.push(right);
+                if (bottom && !bottom.visited) neighbors.push(bottom);
+                if (left && !left.visited) neighbors.push(left);
+
+                if (neighbors.length > 0) {
+                    let r = Math.floor(Math.random() * neighbors.length);
+                    return neighbors[r];
+                } else {
+                    return undefined;
+                }
+            }
+
+            show() {
+                let x = this.i * w;
+                let y = this.j * w;
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.lineCap = 'round';
+
+                if (this.walls[0]) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + w, y); ctx.stroke(); }
+                if (this.walls[1]) { ctx.beginPath(); ctx.moveTo(x + w, y); ctx.lineTo(x + w, y + w); ctx.stroke(); }
+                if (this.walls[2]) { ctx.beginPath(); ctx.moveTo(x + w, y + w); ctx.lineTo(x, y + w); ctx.stroke(); }
+                if (this.walls[3]) { ctx.beginPath(); ctx.moveTo(x, y + w); ctx.lineTo(x, y); ctx.stroke(); }
+
+                if (this.visited) {
+                    ctx.fillStyle = '#fff';
+                    ctx.fillRect(x + 1, y + 1, w - 2, w - 2);
+                }
+            }
+
+            highlight() {
+                let x = this.i * w;
+                let y = this.j * w;
+                ctx.fillStyle = 'rgba(59, 130, 246, 0.5)';
+                ctx.fillRect(x + 1, y + 1, w - 2, w - 2);
+            }
+        }
+
+        function index(i, j) {
+            if (i < 0 || j < 0 || i > cols - 1 || j > rows - 1) return -1;
+            return i + j * cols;
+        }
+
+        function removeWalls(a, b) {
+            let x = a.i - b.i;
+            if (x === 1) { a.walls[3] = false; b.walls[1] = false; }
+            else if (x === -1) { a.walls[1] = false; b.walls[3] = false; }
+            let y = a.j - b.j;
+            if (y === 1) { a.walls[0] = false; b.walls[2] = false; }
+            else if (y === -1) { a.walls[2] = false; b.walls[0] = false; }
+        }
+
+        function setup() {
+            if (isGenerating) return;
+            
+            clearInterval(generationInterval);
+            cancelAnimationFrame(animationId);
+            
+            cols = parseInt(colsInput.value);
+            rows = parseInt(rowsInput.value);
+            w = parseInt(cellSizeInput.value);
+            
+            canvas.width = cols * w;
+            canvas.height = rows * w;
+            
+            grid = [];
+            stack = [];
+            solutionPath = [];
+            
+            for (let j = 0; j < rows; j++) {
+                for (let i = 0; i < cols; i++) {
+                    grid.push(new Cell(i, j));
+                }
+            }
+            
+            current = grid[0];
+            current.visited = true;
+
+            isGenerating = true;
+            generateBtn.disabled = true;
+            generateBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            downloadMazeBtn.disabled = true;
+            downloadMazeBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            downloadSolutionBtn.disabled = true;
+            downloadSolutionBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            
+            statusText.textContent = '迷路を生成中...';
+            statusText.className = 'text-center font-bold text-lg mb-2 text-blue-600';
+            
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            drawLoop();
+        }
+
+        function drawLoop() {
+            let speed = parseInt(speedInput.value);
+            
+            function step() {
+                let steps = speed === 0 ? 100 : 1;
+                
+                for(let s = 0; s < steps; s++) {
+                    if(!isGenerating) break;
+
+                    current.visited = true;
+                    let next = current.checkNeighbors();
+                    
+                    if (next) {
+                        next.visited = true;
+                        stack.push(current);
+                        removeWalls(current, next);
+                        current = next;
+                    } else if (stack.length > 0) {
+                        current = stack.pop();
+                    } else {
+                        isGenerating = false;
+                        grid[0].walls[0] = false;
+                        grid[grid.length - 1].walls[2] = false;
+                    }
+                }
+
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                
+                for (let i = 0; i < grid.length; i++) {
+                    grid[i].show();
+                }
+
+                if (isGenerating) {
+                    current.highlight();
+                    if (speed === 0) {
+                        animationId = requestAnimationFrame(step);
+                    } else {
+                        generationInterval = setTimeout(step, speed);
+                    }
+                } else {
+                    finishGeneration();
+                }
+            }
+            
+            step();
+        }
+
+        function finishGeneration() {
+            drawStartEnd();
+            statusText.textContent = '迷路が完成しました！パスを探索します...';
+            solveMaze();
+        }
+
+        function drawStartEnd() {
+            // S
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.4)';
+            ctx.fillRect(0, 0, w, w);
+            ctx.fillStyle = '#000';
+            ctx.font = `bold ${w/2}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('S', w/2, w/2);
+
+            // G
+            let gx = (cols-1)*w;
+            let gy = (rows-1)*w;
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.4)';
+            ctx.fillRect(gx, gy, w, w);
+            ctx.fillStyle = '#000';
+            ctx.fillText('G', gx + w/2, gy + w/2);
+        }
+
+        function getUnblockedNeighbors(cell) {
+            let neighbors = [];
+            let i = cell.i;
+            let j = cell.j;
+
+            let topCell = grid[index(i, j - 1)];
+            let rightCell = grid[index(i + 1, j)];
+            let bottomCell = grid[index(i, j + 1)];
+            let leftCell = grid[index(i - 1, j)];
+
+            if (!cell.walls[0] && topCell) neighbors.push(topCell);
+            if (!cell.walls[1] && rightCell) neighbors.push(rightCell);
+            if (!cell.walls[2] && bottomCell) neighbors.push(bottomCell);
+            if (!cell.walls[3] && leftCell) neighbors.push(leftCell);
+
+            return neighbors;
+        }
+
+        function solveMaze() {
+            let start = grid[0];
+            let end = grid[grid.length - 1];
+            
+            let queue = [start];
+            let cameFrom = new Map();
+            let visited = new Set();
+            visited.add(start);
+
+            while (queue.length > 0) {
+                let curr = queue.shift();
+                
+                if (curr === end) {
+                    break;
+                }
+
+                let neighbors = getUnblockedNeighbors(curr);
+                for (let next of neighbors) {
+                    if (!visited.has(next)) {
+                        visited.add(next);
+                        cameFrom.set(next, curr);
+                        queue.push(next);
+                    }
+                }
+            }
+
+            let curr = end;
+            while (curr !== start) {
+                solutionPath.push(curr);
+                curr = cameFrom.get(curr);
+            }
+            solutionPath.push(start);
+            solutionPath.reverse();
+
+            statusText.textContent = '完成！画像を保存できます。';
+            statusText.className = 'text-center font-bold text-lg mb-2 text-green-600';
+
+            generateBtn.disabled = false;
+            generateBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            downloadMazeBtn.disabled = false;
+            downloadMazeBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            downloadSolutionBtn.disabled = false;
+            downloadSolutionBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            
+            // 描画を確定
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            for (let i = 0; i < grid.length; i++) {
+                grid[i].show();
+            }
+            drawStartEnd();
+        }
+
+        function drawSolution() {
+            if(solutionPath.length === 0) return;
+            
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+            ctx.lineWidth = Math.max(2, w / 4);
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            for (let k = 0; k < solutionPath.length; k++) {
+                let p = solutionPath[k];
+                let x = p.i * w + w / 2;
+                let y = p.j * w + w / 2;
+                if (k === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            }
+            ctx.stroke();
+        }
+
+        function downloadImage(filename, withSolution) {
+            let tempCanvas = document.createElement('canvas');
+            tempCanvas.width = canvas.width;
+            tempCanvas.height = canvas.height;
+            let tCtx = tempCanvas.getContext('2d');
+            
+            tCtx.fillStyle = '#fff';
+            tCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+            
+            for (let i = 0; i < grid.length; i++) {
+                let cell = grid[i];
+                let x = cell.i * w;
+                let y = cell.j * w;
+                tCtx.strokeStyle = '#000';
+                tCtx.lineWidth = 2;
+                tCtx.lineCap = 'round';
+
+                if (cell.walls[0]) { tCtx.beginPath(); tCtx.moveTo(x, y); tCtx.lineTo(x + w, y); tCtx.stroke(); }
+                if (cell.walls[1]) { tCtx.beginPath(); tCtx.moveTo(x + w, y); tCtx.lineTo(x + w, y + w); tCtx.stroke(); }
+                if (cell.walls[2]) { tCtx.beginPath(); tCtx.moveTo(x + w, y + w); tCtx.lineTo(x, y + w); tCtx.stroke(); }
+                if (cell.walls[3]) { tCtx.beginPath(); tCtx.moveTo(x, y + w); tCtx.lineTo(x, y); tCtx.stroke(); }
+            }
+
+            // S / G
+            tCtx.fillStyle = 'rgba(0, 255, 0, 0.4)';
+            tCtx.fillRect(0, 0, w, w);
+            tCtx.fillStyle = '#000';
+            tCtx.font = `bold ${w/2}px sans-serif`;
+            tCtx.textAlign = 'center';
+            tCtx.textBaseline = 'middle';
+            tCtx.fillText('S', w/2, w/2);
+
+            let gx = (cols-1)*w;
+            let gy = (rows-1)*w;
+            tCtx.fillStyle = 'rgba(255, 0, 0, 0.4)';
+            tCtx.fillRect(gx, gy, w, w);
+            tCtx.fillStyle = '#000';
+            tCtx.fillText('G', gx + w/2, gy + w/2);
+
+            if (withSolution) {
+                tCtx.beginPath();
+                tCtx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+                tCtx.lineWidth = Math.max(2, w / 4);
+                tCtx.lineCap = 'round';
+                tCtx.lineJoin = 'round';
+
+                for (let k = 0; k < solutionPath.length; k++) {
+                    let p = solutionPath[k];
+                    let x = p.i * w + w / 2;
+                    let y = p.j * w + w / 2;
+                    if (k === 0) {
+                        tCtx.moveTo(x, y);
+                    } else {
+                        tCtx.lineTo(x, y);
+                    }
+                }
+                tCtx.stroke();
+            }
+
+            let link = document.createElement('a');
+            link.download = filename;
+            link.href = tempCanvas.toDataURL('image/png');
+            link.click();
+        }
+
+        generateBtn.addEventListener('click', setup);
+        
+        downloadMazeBtn.addEventListener('click', () => {
+            downloadImage(`maze_${cols}x${rows}.png`, false);
+        });
+        
+        downloadSolutionBtn.addEventListener('click', () => {
+            downloadImage(`maze_${cols}x${rows}_solution.png`, true);
+        });
+
+        canvas.width = 600;
+        canvas.height = 600;
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#ccc';
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('「迷路を作る」ボタンを押してください', canvas.width/2, canvas.height/2);
+
+    </script>
+</body>
+</html>
